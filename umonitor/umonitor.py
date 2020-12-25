@@ -249,7 +249,7 @@ class Umonitor(Screen):
 	def _get_running_instance_pid(self):
 		pgrep_out = subprocess.run(["pgrep", "umonitor"], capture_output=True)
 		pids = pgrep_out.stdout.decode("UTF-8").split("\n")
-		print(pids)
+		#print(pids)
 		instance_pid = 0
 		for i in pids:
 			try:
