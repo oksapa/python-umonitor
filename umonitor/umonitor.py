@@ -7,6 +7,12 @@ import json
 import os
 import subprocess
 import daemon
+import signal
+from enum import Enum
+
+class Signals(Enum):
+	PAUSE = 1
+	RESUME = 2
 
 class Umonitor(Screen):
 
@@ -16,7 +22,11 @@ class Umonitor(Screen):
 		self.config_fn = config_fn
 		self.dry_run = False
 		self.connected = False
+		self.paused = False
 		# self._exec_scripts = True
+
+		signal.signal(signal.SIGUSR1, self.pause_handler)
+		signal.signal(signal.SIGUSR2, self.resume_handler)
 
 		try:
 			with open(self.config_file, "r") as config_fh:
@@ -28,6 +38,26 @@ class Umonitor(Screen):
 			self.config_file_exists = False
 		else:
 			self.config_file_exists = True
+
+	def pause_handler(self, signum, frame):
+			self.paused = True
+			logging.info("Changing app state to paused")
+
+	def resume_handler(self, signum, frame):
+			self.paused = False
+			logging.info("Changing app state to normal")
+
+
+	def pause_resume_action(self, action):
+		instance_pid = self._get_running_instance_pid()
+		# logging.debug(float(pgrep_out.stdout.decode("UTF-8")))
+		if instance_pid < 1:
+			raise Exception("umonitor not running. Please start umonitor with --listen.")
+		sig = signal.SIGUSR2
+		if action == Signals.PAUSE:
+			sig = signal.SIGUSR1
+		os.kill(instance_pid, sig)
+
 
 	def run(self):
 		if self.save:
@@ -49,6 +79,10 @@ class Umonitor(Screen):
 				self.listen()
 		elif self.delete:
 			self.delete_profile()
+		elif self.pause:
+			self.pause_resume_action(Signals.PAUSE)
+		elif self.resume:
+			self.pause_resume_action(Signals.RESUME)
 		else:
 			self.view_current_status()
 
@@ -176,6 +210,11 @@ class Umonitor(Screen):
 			self.exec_scripts(profile_name)
 
 	def autoload(self):
+		if self.paused:
+			print("Paused - not loading configuration")
+			logging.info("In paused state. Not touching configurations")
+			return
+
 		if self.connected == False:
 			self.connect_to_server()
 			self.setup_info = self.get_setup_info()
@@ -207,11 +246,29 @@ class Umonitor(Screen):
 		logging.debug("Current status: %s" % self.setup_info)
 		logging.debug("Candidate crtcs: %s" % self.candidate_crtc)
 
+	def _get_running_instance_pid(self):
+		pgrep_out = subprocess.run(["pgrep", "umonitor"], capture_output=True)
+		pids = pgrep_out.stdout.decode("UTF-8").split("\n")
+		print(pids)
+		instance_pid = 0
+		for i in pids:
+			try:
+				pid = int(i)
+			except:
+				continue
+			if pid != os.getpid():
+				instance_pid = pid
+				break
+			
+		#instance_pid = int(pgrep_out.stdout.decode("UTF-8"))
+		logging.info(instance_pid)
+		return instance_pid
+
 	def _prevent_duplicate_running(self):
-		pgrep_out = subprocess.run(["pgrep", "-c", "umonitor"], capture_output=True)
-		# logging.debug(float(pgrep_out.stdout.decode("UTF-8")))
-		if float(pgrep_out.stdout.decode("UTF-8")) > 1:
+		instance_pid = self._get_running_instance_pid()
+		if instance_pid > 0:
 			raise Exception("umonitor is already running. Please kill that process and try again.")
+
 
 	def view_profiles(self):
 		print(json.dumps(self.profile_data, indent=4))
@@ -237,6 +294,8 @@ class Umonitor(Screen):
 		mut_ex_group.add_argument("-a", "--autoload", dest="_autoload", action="store_true", help="load profile that matches with current configuration once")
 		mut_ex_group.add_argument("-n", "--listen", dest="_listen", action="store_true", help="listens for changes in the setup, and applies the new configuration automatically")
 		mut_ex_group.add_argument("-g", "--get_active_profile", dest="gap", action="store_true", help="returns current active profile")
+		mut_ex_group.add_argument("-p", "--pause", dest="pause", action="store_true", help="pause running umonitor instance")
+		mut_ex_group.add_argument("-r", "--resume", dest="resume", action="store_true", help="resume running umonitor instance")
 		parser.add_argument("--dry_run", action="store_true", help="run program without changing configuration")
 		parser.add_argument("-v", "--verbose", default=0, action="count", help="set verbosity level, 1 = info, 2 = debug")
 		parser.add_argument("-f", "--force", dest="force_load", action="store_true", help="disable all outputs even if they do not change during loading")
